@@ -3,7 +3,7 @@
 |-TwitterTool.py
 |-TwitterCleanser.py
 |-TwitterScraper.py
-
+|-EmojiDictionary.json
 |-TwitterSentimentAnalysis.py
 |- ProjectName
 |  |- Data 
