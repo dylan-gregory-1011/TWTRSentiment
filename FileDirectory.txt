@@ -1,0 +1,23 @@
+
+|-TwitterTool.py
+|-TwitterCleanser.py
+|-TwitterScraper.py
+
+|-TwitterSentimentAnalysis.py
+|- ProjectName
+|  |- Data 
+|    |- Group 1
+|      |-RawData
+|      |-CleansedData
+|    |- Group 2
+|      |-RawData
+|      |-CleansedData
+|    .
+|    .
+|    .
+|    |- Group N
+|      |-RawData
+|      |-CleansedData
+|  ProjectNameCalculatedData.csv
+|  ProjectNameKeys.json
+|  ProjectNameQueryData.csv
