@@ -6,6 +6,7 @@ In order to properly run the code, the following structure needs to be followed.
 |-TwitterTool.py
 |-TwitterCleanser.py
 |-TwitterScraper.py
+
 |-TwitterSentimentAnalysis.py
 |- ProjectName
 |  |- Data 
