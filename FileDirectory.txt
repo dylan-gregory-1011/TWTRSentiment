@@ -1,3 +1,4 @@
+#The directory structure that is necessary to run the project.
 
 |-TwitterTool.py
 |-TwitterCleanser.py
