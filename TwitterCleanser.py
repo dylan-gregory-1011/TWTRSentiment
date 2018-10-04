@@ -92,7 +92,7 @@ class TwitterCleanser(object):
         """
         Returns an array of the delta dates to update for the sentiment analysis portion
         """
-        if self.load_type = 'FULL':
+        if self.load_type == 'FULL':
             return None
         else:
             return self.delta_dates_updt
