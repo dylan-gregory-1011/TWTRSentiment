@@ -8,8 +8,10 @@ import sys
 import csv
 import re
 from os import listdir, remove, rename
+from pathlib import Path
 from os.path import basename, isdir, join, dirname, abspath, isfile
 import logging
+import gzip
 import pandas as pd
 from pytz import timezone
 from datetime import datetime
@@ -21,17 +23,17 @@ __copyright__ = "Copyright (C) 2018 Dylan Smith"
 __credits__ = ["Dylan Smith"]
 
 __license__ = "Personal Use"
-__version__ = "1.0"
+__version__ = "2.0"
 __maintainer__ = "Dylan Smith"
 __email__ = "-"
 __status__ = "Development"
 
-
 class TwitterCleanser(object):
     #constants
-    curr_dir = dirname(abspath(__file__))
+    curr_dir = Path().resolve()
     clean_column_names = ['id', 'user_id','date', 'full_text', 'retweets', 'sentiment']
     original_dfs, data_files, reply_RT_dfs, delta_dates_updt = [], [] , [], []
+    calendar = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
 
     #initialization
     def __init__(self, project_name, load_type):
@@ -44,10 +46,10 @@ class TwitterCleanser(object):
         #declare original properties
         self.project_name = project_name
         self.load_type = load_type
-        self.proj_data_dir = self.curr_dir+ '/' + self.project_name + '/Data/'
-        self.orig_tweet_dir = self.proj_data_dir + 'OriginalTweets/'
-        self.tmp_file = self.proj_data_dir + 'OriginalTweets/tmp.csv'
-        self.analytics_file = self.curr_dir+ '/' + self.project_name + '/' + self.project_name + 'CalculatedData.csv'
+        self.proj_data_dir = self.curr_dir.joinpath(self.project_name, 'Data')
+        self.orig_tweet_dir = self.proj_data_dir.joinpath('OriginalTweets')
+        self.tmp_file = self.proj_data_dir.joinpath('OriginalTweets', 'tmp.csv')
+        self.analytics_file = self.curr_dir.joinpath(self.project_name, 'CalculatedData.csv')
         self.current_date = datetime.today().strftime('%Y%m%d')
         self.getGroupsToClean()
         self.all_groups.remove('OriginalTweets')
@@ -83,10 +85,35 @@ class TwitterCleanser(object):
     def getDateFromDateTime(self, x):
         """
         Get the date from each twitter record as a distinct day.  Reformat Properly
+
         ::param  x : String of the twitter date
+
         returns- a String with the date in the format of YYYYMMDD
         """
         return ''.join([x.split(' ')[i] for i in [1,2,5]])
+
+    def getPreviousDays(self, date):
+        """
+        Function gets the previous dates for each file so it doesn't have to iterate through all the files, just the few
+        days before.  This will hopefully cut down the run time to find the reply tweets
+
+        ::param date: A string that is the current date
+
+        returns:  an array of dates to find the original tweet
+        """
+        calendar = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
+        month, day, year = date[:3], int(date[3:5]), int(date[5:9])
+        month_ix = calendar.index(month)
+
+        if month_ix == 0:
+            month = 'Dec'
+            year -= 1
+
+        if day == 1:
+            month = calendar[month_ix - 1]
+            return [date] + [month + str(date) + str(year) for date in [28,29,30,31]]
+        else:
+            return [date, month + ('0' + str(day - 1))[-2:] + str(year)]
 
     def getDeltaDatesToUpdate(self):
         """
@@ -97,8 +124,7 @@ class TwitterCleanser(object):
         else:
             return self.delta_dates_updt
 
-    #DataFrame Objects to write data
-    def writeCleansedTwitterData(self, dataframe, output_structure, clean_file, delta):
+    def writeCleansedTwitterData(self, dataframe, output_structure, clean_file_dir, group, is_orig_tweets):
         """
         ::param dataframe: Takes a dataframe as an object and writes it to a csv file
         ::param file_path: the file to write the dataframe object to
@@ -109,28 +135,10 @@ class TwitterCleanser(object):
             self.delta_dates_updt = dataframe['date_as_str'].unique()
 
         for distinct_date in dataframe['date_as_str'].unique():
-            if delta:
-                orig_tweet_file = clean_file + distinct_date + '.csv'
-                #if there is a file, go through the data and clear out any duplicate records
-                if isfile(orig_tweet_file):
-                    list_of_ids = dataframe.loc[dataframe['date_as_str'] == distinct_date]['id'].values.tolist()
-                    with open(orig_tweet_file, 'r', encoding = 'utf-8') as inp, open(self.tmp_file, 'w', encoding = 'utf-8') as out:
-                        #get the files and write the output to a new tmp file
-                        writer = csv.writer(out, delimiter = '\t')
-                        for row in csv.reader(inp, delimiter = '\t'):
-                            #write rows that have distinct values, pass over empty rows
-                            try:
-                                if row[0] not in list_of_ids:
-                                    writer.writerow(row)
-                            except:
-                                pass
-                    #rename the files and ensure the original data is properly situated
-                    remove(orig_tweet_file)
-                    rename(self.tmp_file, orig_tweet_file)
-
             dataframe.loc[dataframe['date_as_str'] == distinct_date]\
                             [output_structure].\
-                            to_csv(clean_file + distinct_date + '.csv',
+                            to_csv(clean_file_dir.joinpath(group + distinct_date + '.csv.gz') ,
+                                    compression = 'gzip',
                                     mode = 'a',
                                     sep = '\t',
                                     index = False,
@@ -146,41 +154,43 @@ class TwitterCleanser(object):
         logging.info("Going through Raw Tweets to Cleanse")
         for group in self.all_groups:
             logging.info("Going through tweets for team %s" % group)
-            raw_data = self.proj_data_dir + group + '/RawData/'
-            cleansed_data = self.proj_data_dir + group + '/CleansedData/'
+            raw_data_dir = self.proj_data_dir.joinpath(group, 'RawData')
+            cleansed_data_dir = self.proj_data_dir.joinpath(group,'CleansedData')
 
             #get the files to be loaded, and remove any potential files that could have duplicate dateata
             if self.load_type == 'FULL':
-                raw_data_files = self.getFilesInDir(raw_data)
-                for data_file in self.getFilesInDir(cleansed_data):
-                    remove(cleansed_data + data_file)
+                raw_data_files = self.getFilesInDir(raw_data_dir)
+                for data_file in self.getFilesInDir(cleansed_data_dir):
+                    remove(cleansed_data_dir.joinpath(data_file))
                 for data_file in self.getFilesInDir(self.orig_tweet_dir):
-                    remove(self.orig_tweet_dir + data_file)
+                    remove(self.orig_tweet_dir.joinpath(data_file))
             else:
-                raw_data_files = [group + self.current_date + '.csv']
+                raw_data_files = [group + self.current_date + '.csv.gz']
 
             for data_file in raw_data_files:
                 #get original tweets and re-format the date
-                data_DF = pd.read_csv(raw_data + data_file,
+                data_DF = pd.read_csv(raw_data_dir.joinpath(data_file) ,
+                                    compression = 'gzip',
                                     sep = '\t',
                                     index_col = False,
                                     encoding = 'utf-8',
                                     names = ['id','user_id', 'date', 'full_text', 'replied_to_id', 'retweeted_id'],
                                     converters = {'full_text':lambda x:x.replace('\n','').replace('\r',''),
-                                                   'date': lambda x: self.convertToCentralTimeZone(x)},
-                                    lineterminator = '\n').fillna('0')
+                                                   'date': lambda x: self.convertToCentralTimeZone(x),
+                                                   'replied_to_id': lambda x:  str(x) if x else '0',
+                                                   'retweeted_id': lambda x: str(x) if x else '0'},
+                                    lineterminator = '\n')
                 data_DF.loc[:, 'date_as_str'] = data_DF['date'].apply(self.getDateFromDateTime)
 
                 original_tweet_DF = data_DF.loc[(data_DF['replied_to_id'] == '0') & (data_DF['retweeted_id'] == '0')].copy()
                 self.original_dfs.append(original_tweet_DF)
                 self.reply_RT_dfs.append(data_DF.loc[(data_DF['replied_to_id'] != '0') | (data_DF['retweeted_id'] != '0')].copy())
-                self.data_files.append((cleansed_data, group))
-
+                self.data_files.append((cleansed_data_dir, group))
                 #if it is an original load, load all of the tweets to the correct file
-                original_tweet_DF.loc[:, 'retweets', ] = 0
+                original_tweet_DF.loc[:, 'retweets'] = 0
                 original_tweet_DF.loc[:, 'sentiment'] = 0
                 self.writeCleansedTwitterData(original_tweet_DF, self.clean_column_names,
-                                                cleansed_data + group, False)
+                                                cleansed_data_dir, group, False)
 
     def updateOriginalTweets(self):
         """
@@ -190,7 +200,22 @@ class TwitterCleanser(object):
         logging.info("Writing Original Tweets to Central File")
         for distinct_DF in self.original_dfs:
             self.writeCleansedTwitterData(distinct_DF, ['id','user_id', 'date', 'full_text'],
-                                    self.orig_tweet_dir + 'OriginalTweetsOn', True)
+                                    self.orig_tweet_dir,  'OriginalTweetsOn' , True)
+
+        for data_file in self.getFilesInDir(self.orig_tweet_dir):
+            original_tweet_DF = pd.read_csv(self.orig_tweet_dir.joinpath(data_file),
+                                            compression = 'gzip',
+                                            sep = '\t',
+                                            index_col = False,
+                                            names = ['id','user_id', 'date', 'full_text'])
+            original_tweet_DF.drop_duplicates(subset = ['id'], keep = 'first', inplace = True)
+            original_tweet_DF.to_csv(self.orig_tweet_dir.joinpath(data_file),
+                                compression = 'gzip',
+                                mode = 'w',
+                                sep = '\t',
+                                index = False,
+                                header = False,
+                                line_terminator = '\n')
 
     def cleanseRepliedTweets(self):
         """
@@ -199,12 +224,24 @@ class TwitterCleanser(object):
         data to the dataframe
         """
         original_files = self.getFilesInDir(self.orig_tweet_dir)
-        logging.info("Going through Replied Data and retweets")
+        logging.info("Going through Replied Data")
         for index, clean_data_DF in enumerate(self.reply_RT_dfs):
             replied_data_DF = pd.DataFrame(columns = self.clean_column_names)
             clean_data_DF.loc[:, 'replied_to_id'] = clean_data_DF['replied_to_id'].astype('int')
+            all_dates = []
+            for date in clean_data_DF['date_as_str'].unique():
+                all_dates += self.getPreviousDays(date)
+
             for orig_file in original_files:
-                original_tweets_DF = pd.read_csv(self.orig_tweet_dir + orig_file,
+                date_check = False
+                for date in all_dates:
+                    if date in orig_file:
+                        date_check = True
+                if date_check == False:
+                    continue
+
+                original_tweets_DF = pd.read_csv(self.orig_tweet_dir.joinpath(orig_file),
+                                                compression = 'gzip',
                                                 sep = '\t',
                                                 index_col = False,
                                                 encoding = 'utf-8',
@@ -222,7 +259,7 @@ class TwitterCleanser(object):
                 replied_data_DF = pd.concat([new_DF[['id', 'user_id','date', 'full_text', 'date_as_str']], replied_data_DF], sort = False)
 
             self.writeCleansedTwitterData(replied_data_DF, self.clean_column_names,
-                                        self.data_files[index][0] + self.data_files[index][1],  False)
+                                        self.data_files[index][0], self.data_files[index][1],  False)
 
     def sumRetweets(self):
         """
@@ -233,30 +270,30 @@ class TwitterCleanser(object):
         logging.info("Summing Retweet Counts")
         df_retweet_DF = pd.DataFrame(columns = ['retweeted_id'])
         for index, replied_dataframe in enumerate(self.reply_RT_dfs):
-            replied_dataframe.loc[:, 'retweeted_id'] = replied_dataframe['retweeted_id'].fillna('0').astype('int')
+            replied_dataframe.loc[:, 'retweeted_id'] = replied_dataframe['retweeted_id'].astype('int')
             df_retweet_DF = pd.concat([replied_dataframe[['retweeted_id']], df_retweet_DF], sort = False)
             if index + 1 == len(self.reply_RT_dfs) or self.data_files[index][0] != self.data_files[index + 1][0]:
                 full_retweets_DF = replied_dataframe[['retweeted_id']].groupby('retweeted_id').size().reset_index(name = 'counts')
                 for file in self.getFilesInDir(self.data_files[index][0]):
-                    cleaned_tweets = pd.read_csv(self.data_files[index][0] + file,
+                    cleaned_tweets = pd.read_csv(self.data_files[index][0].joinpath(file),
+                                                    compression = 'gzip',
                                                     sep = '\t',
                                                     index_col = False,
-                                                    names = ['id', 'user_id','date', 'full_text', 'retweets', 'sentiment'])
-
+                                                    names = ['id', 'user_id','date', 'full_text', 'retweets', 'sentiment']).fillna(0)
 
                     new_DF = pd.merge(cleaned_tweets,
                                       full_retweets_DF,
                                       how = 'left',
                                       left_on = ['id'],
                                       right_on = ['retweeted_id'])
-
-                    #new_DF.drop_duplicates(keep= 'first', inplace=True)
                     new_DF.loc[:,'retweets'] = new_DF['counts'].fillna(0) + new_DF['retweets'].fillna(0)
                     new_DF[['id', 'user_id','date', 'full_text', 'retweets', 'sentiment']]\
-                            .to_csv(self.data_files[index][0] + file,
+                            .to_csv(self.data_files[index][0].joinpath(file),
+                            compression = 'gzip',
                             mode = 'w',
                             sep = '\t',
                             index = False,
                             header = False)
+
                 #cleaned the retweet dataframe and move on to the next team.
                 df_retweet_DF.iloc[0:0]
