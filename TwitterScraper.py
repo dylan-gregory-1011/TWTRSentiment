@@ -1,39 +1,33 @@
 ##!/usr/bin/env python
 """
 Beginner Twitter analysis
-:: Sets up a Twython Search API object that returns values based on specifications in a
-file
+:: Sets up a Twython Search API object that returns values based on query specifications in a file
 """
 
 #imports
 from twython import Twython, TwythonError
-import zlib
 import json
 import re
-from os.path import dirname, abspath, isfile
-from os import remove
+from pathlib import Path
 import pandas as pd
 from time import sleep, gmtime
 from datetime import datetime
 import logging
-import zlib
 from calendar import timegm
-
 
 __author__ = "Dylan Smith"
 __copyright__ = "Copyright (C) 2018 Dylan Smith"
 __credits__ = ["Dylan Smith"]
 
 __license__ = "Personal Use"
-__version__ = "1.0"
+__version__ = "2.0"
 __maintainer__ = "Dylan Smith"
 __email__ = "-"
 __status__ = "Development"
 
-#constants
-curr_dir = dirname(abspath(__file__))
-
 class TwitterScraper(Twython):
+    #properties
+    curr_dir = Path().resolve()
     #initialization
     def __init__(self, project_name):
         """ Instantiates an instance of the Twython Scraper.  Takes one input and sets up
@@ -45,13 +39,13 @@ class TwitterScraper(Twython):
         logging.info('-- Setting Credentials and Search Terms --')
         #Properties
         self.apiCallsLeftInPeriod = 1000
-        self.proj_dir = curr_dir + '/' + project_name
+        self.proj_dir = self.curr_dir.joinpath(project_name)
         self.proj_name = project_name
         self.client_args = {'headers': {'User-Agent': 'Chrome',"accept-charset": "utf-8", }, }
         self.current_date = datetime.today().strftime('%Y%m%d')
         self.delay_time = 1.5
         #get credentials and instantiate
-        self.credentials = self.getTwitterCredentials(self.proj_dir + '/' + self.proj_name + 'keys.json')
+        self.credentials = self.getTwitterCredentials(self.proj_dir.joinpath('TwitterAPIKeys.json'))
         self.twitter = Twython(self.credentials['TWITTER_APP_KEY'],
                             self.credentials['TWITTER_APP_SECRET'],
                             client_args = self.client_args )
@@ -77,7 +71,7 @@ class TwitterScraper(Twython):
         """
         Returns the query path for the project in question to allow the user to iterate through queries
         """
-        return self.proj_dir + '/' + self.proj_name + 'QueryData.csv'
+        return self.proj_dir.joinpath('TwitterSearchQueries.csv')
 
     def downloadHistoricalTweets(self, output_name, query, max_id):
         """
@@ -90,7 +84,7 @@ class TwitterScraper(Twython):
         ::param max_id:  The max query from the previous data extract.  This will be used to limit the return
         """
         #update
-        self.output_file = self.proj_dir + '/Data/' + output_name + '/RawData/' + output_name + self.current_date + '.csv'
+        self.output_file = self.proj_dir.joinpath('Data', output_name, 'RawData', output_name + self.current_date + '.csv.gz')
         self.total_records_downloaded = 0
         self.query_updt = query.copy()
         self.query_updt['since_id'] = max_id
@@ -153,11 +147,13 @@ class TwitterScraper(Twython):
             self.dict_['replied_to_id'].append(self.xstr(self.status['in_reply_to_status_id_str']))
             self.dict_['retweeted_id'].append(self.xstr(self.retweeted_id))
 
+
         self.total_records_downloaded += len(self.twitter_results['statuses'])
 
         logging.info("-- %i Total Records Downloaded --" % self.total_records_downloaded)
         self.df = pd.DataFrame(self.dict_)
         self.df.to_csv(self.output_file,
+                    compression = 'gzip',
                     mode = 'a',
                     sep='\t',
                     index = False,
@@ -167,7 +163,6 @@ class TwitterScraper(Twython):
 
         if first:
             self.new_max_id = max([int(x) for x in self.dict_['id']])
-
         try:
             return min([int(x) for x in self.dict_['id']])
         except:
