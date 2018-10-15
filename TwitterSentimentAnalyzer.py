@@ -7,11 +7,13 @@ NFL Sentiment Analysis credentials controller
 import sys
 import json
 from os import listdir, remove, rename
-from os.path import basename, isdir, join, dirname, abspath, isfile
+from os.path import basename, isdir, join, isfile
+from pathlib import Path
 import logging
 import pandas as pd
 from datetime import datetime
 from textblob import TextBlob
+from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer
 logging.basicConfig(stream=sys.stdout, level = logging.INFO)
 
 
@@ -26,10 +28,11 @@ __email__ = "-"
 __status__ = "Development"
 
 class TwitterSentimentAnalyzer(object):
-
     #constants
-    curr_dir = dirname(abspath(__file__))
+    curr_dir = Path().resolve()
     clean_column_names = ['id', 'user_id','date', 'full_text', 'retweets', 'sentiment']
+    analyzer_type = "Vader"
+    vader_analyzer = SentimentIntensityAnalyzer()
 
     def __init__(self, project_name, dates_to_update):
         """ Instantiates an instance of the Twython Cleanser.  Takes one input and sets up
@@ -41,8 +44,9 @@ class TwitterSentimentAnalyzer(object):
         #declare original properties
         self.project_name = project_name
         self.load_dates = dates_to_update
-        self.proj_data_dir = self.curr_dir+ '/' + self.project_name + '/Data/'
-        self.analytics_file = self.curr_dir+ '/' + self.project_name + '/' + self.project_name + 'CalculatedData.csv'
+        self.proj_data_dir = self.curr_dir.joinpath(self.project_name, 'Data')
+        self.analytics_file = self.curr_dir.joinpath(self.project_name, 'CalculatedData.csv')
+        self.record_counts_file = self.curr_dir.joinpath(self.project_name, 'RecordCounts.csv')
         self.getGroupsToClean()
         self.emoji_replacements = self.getEmojiReplacements()
         self.all_groups.remove('OriginalTweets')
@@ -58,7 +62,7 @@ class TwitterSentimentAnalyzer(object):
         self.all_groups = [f for f in listdir(self.proj_data_dir) if isdir(join(self.proj_data_dir, f))]
 
     def getEmojiReplacements(self):
-        with open(self.curr_dir + '/' + 'EmojiDictionary.json', "r",encoding='utf-8') as file:
+        with open(self.curr_dir.joinpath('EmojiDictionary.json'), "r",encoding='utf-8') as file:
             return json.load(file)
 
     def getFilesInDir(self, directory):
@@ -75,26 +79,30 @@ class TwitterSentimentAnalyzer(object):
         ::param tweet: Takes a string input and from the tweet.
         return: The sentiment for the string of each tweet
         """
-        for emoji, replacement in self.emoji_replacements.items():
-            tweet = tweet.replace(emoji, ' ' + replacement + ' ')
+        if self.analyzer_type == 'Vader':
+            return self.vader_analyzer.polarity_scores(tweet)['compound']
+        else:
+            return TextBlob(tweet).sentiment.polarity
 
-        tweet_blob = TextBlob(tweet)
-        return tweet_blob.sentiment.polarity
 
     def calculateSentimentForTweets(self):
         """
         Iterates through all of the cleansed data files (for each team) and applies the sentiment tool to each tweet and
         re-writes the data back into a cleansed data file.  This is dependent on the previous tweets being loaded into
-        the cleanser and the specific dates that will be updated with sentiment valeus
+        the cleanser and the specific dates that will be updated with sentiment values as well as the record counts
         """
-        #ingest the total sentiment summation file into a dataframe
+        #ingest the total sentiment summation file into a dataframe, pull down the record count file as well
         total_sentiment_DF = pd.read_csv(self.analytics_file,
                                         encoding = 'utf-8',
                                         header = 0)
 
+        total_record_counts_DF = pd.read_csv(self.record_counts_file,
+                                             encoding = 'utf-8',
+                                             header = 0)
+
         for group in self.all_groups:
             logging.info("Calculating Sentiment For %s" % group)
-            cleansed_data_dir = self.proj_data_dir + group + '/CleansedData/'
+            cleansed_data_dir = self.proj_data_dir.joinpath(group, 'CleansedData')
 
             #get the files to be loaded, and remove any potential files that could have duplicate dateata
             if self.load_dates is None:
@@ -102,31 +110,40 @@ class TwitterSentimentAnalyzer(object):
             else:
                 cleansed_data_files = []
                 for date in self.load_dates:
-                    cleansed_data_files.append(group + date + '.csv')
+                    cleansed_data_files.append(group + date + '.csv.gz')
 
             for data_file in cleansed_data_files:
-                cleansed_data_DF = pd.read_csv(cleansed_data_dir + data_file,
+                cleansed_data_DF = pd.read_csv(cleansed_data_dir.joinpath(data_file),
+                                                compression = 'gzip',
                                                 sep = '\t',
                                                 index_col = False,
                                                 encoding = 'utf-8',
                                                 names = self.clean_column_names).fillna('0')
 
                 cleansed_data_DF.loc[:,'sentiment'] = cleansed_data_DF['full_text'].apply(self.returnSentimentForTweet)
-                cleansed_data_DF.to_csv(cleansed_data_dir + data_file,
+                cleansed_data_DF.to_csv(cleansed_data_dir.joinpath(data_file),
+                                            compression = 'gzip',
                                             mode = 'w',
                                             sep = '\t',
                                             index = False,
                                             header = False,
                                             line_terminator = '\n')
                 #update the aggregated sentiment file for the dates specified
-                date_to_add = data_file[-13:-4]
-                if date_to_add not in total_sentiment_DF['Date'].tolist():
-                    new_record = len(total_sentiment_DF['Date'])
+                date_to_add = data_file[-16:-7]
+                if date_to_add not in total_record_counts_DF['Date'].tolist():
+                    new_record = len(total_record_counts_DF['Date'])
                     total_sentiment_DF.loc[new_record] = [date_to_add] + [0 for group in self.all_groups] + [0]
+                    total_record_counts_DF.loc[new_record] = [date_to_add] + [0 for group in self.all_groups]
 
+                #add the records to the data counts
                 total_sentiment_DF.loc[total_sentiment_DF['Date'] == date_to_add, group] = cleansed_data_DF['sentiment'].mean()
-        #once all the groups have been iterated through, write the dataframe to file again
+                total_record_counts_DF.loc[total_record_counts_DF['Date'] == date_to_add , group] = cleansed_data_DF.shape[0]
 
+        #once all the groups have been iterated through, write the dataframe to file again
         total_sentiment_DF.to_csv(self.analytics_file,
+                            mode = 'w',
+                            index = False)
+
+        total_record_counts_DF.to_csv(self.record_counts_file,
                             mode = 'w',
                             index = False)
