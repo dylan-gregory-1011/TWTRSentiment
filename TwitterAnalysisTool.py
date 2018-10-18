@@ -4,6 +4,7 @@ Twitter Sentiment Analysis Project: Utilizes three distinct objects in order to 
 from the Twitter Search API, cleanse the data so that it can be stored properly, and apply a sentiment tool
 to the tweets to try to gauge the daily sentiment for each group.
 
+:: param ProjectName: The project name that you want to run.
 
 Version 1.0: Initial Scope of the project.  This includes the objects that perform the ETL and analysis
 as well as the driver program (This file).
@@ -17,7 +18,7 @@ Version 2.0:
     - Calculates the activity for each group, per day
     - Reformatted the query data to be saved in a json file
     - Created the TwitterAnalysisTool class to drive the daily processing of twitter activity as well
-        as wrapped the process in a bash script so that multiple projects can be run at once 
+        as wrapped the process in a bash script so that multiple projects can be run at once
 
 """
 
