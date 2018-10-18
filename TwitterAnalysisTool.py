@@ -127,4 +127,4 @@ def main(project_name):
 
 if __name__ == '__main__':
     #Run the process for the project in question
-    main(argv[1])
+    main(sys.argv[1])
