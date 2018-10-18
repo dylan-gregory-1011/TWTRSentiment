@@ -7,7 +7,7 @@ NFL Sentiment Analysis credentials controller
 import sys
 import json
 from os import listdir, remove, rename
-from os.path import basename, isdir, join, isfile
+from os.path import isdir, join, isfile
 from pathlib import Path
 import logging
 import pandas as pd
@@ -29,7 +29,7 @@ __status__ = "Development"
 
 class TwitterSentimentAnalyzer(object):
     #constants
-    curr_dir = Path().resolve()
+    curr_dir = Path(__file__).resolve().parent
     clean_column_names = ['id', 'user_id','date', 'full_text', 'retweets', 'sentiment']
     analyzer_type = "Vader"
     vader_analyzer = SentimentIntensityAnalyzer()
