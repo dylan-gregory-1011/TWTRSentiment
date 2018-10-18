@@ -1,17 +1,18 @@
 ##!/usr/bin/env python
 """
 Twitter Cleanser to prepare the tweets for analysis
+
+Version 2: Added compression to all of the data as well as updated the reply process to have more
+          optimal performance
 """
 
 #imports
 import sys
-import csv
 import re
 from os import listdir, remove, rename
 from pathlib import Path
-from os.path import basename, isdir, join, dirname, abspath, isfile
+from os.path import isdir, join, isfile
 import logging
-import gzip
 import pandas as pd
 from pytz import timezone
 from datetime import datetime
@@ -30,7 +31,7 @@ __status__ = "Development"
 
 class TwitterCleanser(object):
     #constants
-    curr_dir = Path().resolve()
+    curr_dir = Path(__file__).resolve().parent
     clean_column_names = ['id', 'user_id','date', 'full_text', 'retweets', 'sentiment']
     original_dfs, data_files, reply_RT_dfs, delta_dates_updt = [], [] , [], []
     calendar = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
