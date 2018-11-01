@@ -1,78 +1,63 @@
 ##!/usr/bin/env python
 """
 Twitter Cleanser to prepare the tweets for analysis
-
 Version 2: Added compression to all of the data as well as updated the reply process to have more
           optimal performance
+Version 3: Cleansed Text data into a sqlite database and re-arranged the raw data files into a new structure
 """
 
 #imports
 import sys
-import re
 from os import listdir, remove, rename
 from pathlib import Path
 from os.path import isdir, join, isfile
 import logging
+from collections import defaultdict
 import pandas as pd
 from pytz import timezone
-from datetime import datetime
+from datetime import datetime, date
 logging.basicConfig(stream=sys.stdout, level = logging.INFO)
-
 
 __author__ = "Dylan Smith"
 __copyright__ = "Copyright (C) 2018 Dylan Smith"
 __credits__ = ["Dylan Smith"]
 
 __license__ = "Personal Use"
-__version__ = "2.0"
+__version__ = "3.0"
 __maintainer__ = "Dylan Smith"
 __email__ = "-"
 __status__ = "Development"
 
 class TwitterCleanser(object):
     #constants
-    curr_dir = Path(__file__).resolve().parent
-    clean_column_names = ['id', 'user_id','date', 'full_text', 'retweets', 'sentiment']
-    original_dfs, data_files, reply_RT_dfs, delta_dates_updt = [], [] , [], []
-    calendar = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
+    clean_column_names = ['id', 'user_id','datetime', 'day', 'full_text', 'retweets', 'sentiment']
+    original_column_names = ['id','user_id', 'datetime', 'day', 'full_text']
+    tmp_rply_column_names = ['id','user_id', 'datetime', 'day', 'full_text', 'replied_to_id', 'retweeted_id']
+    original_dfs, delta_dates_updt, reply_RT_dfs = [], [], defaultdict(list)
+    original_fields = "id BIGINT PRIMARY KEY, user_id TEXT, datetime TEXT, day TEXT, full_text TEXT"
+    table_fields = original_fields + ", retweets INT,  sentiment REAL"
+    tmp_rply_fields = original_fields + ", replied_to_id BIGINT, retweeted_id BIGINT"
 
     #initialization
-    def __init__(self, project_name, load_type):
+    def __init__(self, proj_data_dir, db_connection, load_type):
         """ Instantiates an instance of the Twython Cleanser.  Takes one input and sets up
             the correct connection
 
-            ::param project_name: The project that will get twitter data cleansed
+            ::param proj_data_dir: The directory where the Twitter data is dropped into
+            ::param db_connection: a database connection to a sqlite database
             ::param load_type: What type of load will happen.  (FULL, DELTA)
         """
         #declare original properties
-        self.project_name = project_name
         self.load_type = load_type
-        self.proj_data_dir = self.curr_dir.joinpath(self.project_name, 'Data')
-        self.orig_tweet_dir = self.proj_data_dir.joinpath('OriginalTweets')
-        self.tmp_file = self.proj_data_dir.joinpath('OriginalTweets', 'tmp.csv')
-        self.analytics_file = self.curr_dir.joinpath(self.project_name, 'CalculatedData.csv')
+        self.proj_data_dir = proj_data_dir
+        self.connection = db_connection
         self.current_date = datetime.today().strftime('%Y%m%d')
-        self.getGroupsToClean()
-        self.all_groups.remove('OriginalTweets')
+        self.all_groups = [f for f in listdir(self.proj_data_dir) if isdir(join(self.proj_data_dir, f))]
+        self.executeSQLCommand("CREATE TABLE IF NOT EXISTS OriginalTweets (%s)" % self.original_fields)
+        self.executeSQLCommand("CREATE TABLE IF NOT EXISTS Tmp_Rply (%s)" % self.tmp_rply_fields)
+        self.executeSQLCommand("CREATE TABLE IF NOT EXISTS Retweets_To_Add (retweeted_id BIGINT PRIMARY KEY, count INT)")
 
     #Basic Methods
-    def getGroupsToClean(self):
-        """
-        Get the list of groups to be analyzed in this project and return a list so that the
-        tweets can be processed.  This uses the current raw file path
-        returns - Sets the list of all the groups to be analyzed
-        """
-        logging.info("Getting List of all teams")
-        self.all_groups = [f for f in listdir(self.proj_data_dir) if isdir(join(self.proj_data_dir, f))]
-
-    def getFilesInDir(self, directory):
-        """
-        Get the files in the specified directory.  This is used to ensure that the right files are analyzed
-        :: param  Directory: The directory that we desire the files from
-        returns - All the files names in the specified directory.
-        """
-        return [f for f in listdir(directory) if isfile(join(directory, f)) and f.split('.')[1] == 'csv']
-
     def convertToCentralTimeZone(self, dt_tm):
         """
         Convert the date time stamp that is in the Twitter API return from GMT to CST
@@ -88,35 +73,22 @@ class TwitterCleanser(object):
         Get the date from each twitter record as a distinct day.  Reformat Properly
 
         ::param  x : String of the twitter date
-
         returns- a String with the date in the format of YYYYMMDD
         """
         return ''.join([x.split(' ')[i] for i in [1,2,5]])
 
-    def getPreviousDays(self, date):
+    def getWeekFromDate(self, x):
         """
-        Function gets the previous dates for each file so it doesn't have to iterate through all the files, just the few
-        days before.  This will hopefully cut down the run time to find the reply tweets
+        Get the week number from the date
 
-        ::param date: A string that is the current date
-
-        returns:  an array of dates to find the original tweet
+        ::param x: A string as a date in the format YYYYMMDD
+        returns - a week date for the year.
         """
-        calendar = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
-        month, day, year = date[:3], int(date[3:5]), int(date[5:9])
-        month_ix = calendar.index(month)
+        month = int(self.calendar.index(x[:3])) + 1
+        dt = date(int(x[-4:]), month, int(x[3:5]))
+        return 'Week' + str(dt.isocalendar()[1]) + '|' + x[-4:]
 
-        if month_ix == 0:
-            month = 'Dec'
-            year -= 1
-
-        if day == 1:
-            month = calendar[month_ix - 1]
-            return [date] + [month + str(date) + str(year) for date in [28,29,30,31]]
-        else:
-            return [date, month + ('0' + str(day - 1))[-2:] + str(year)]
-
-    def getDeltaDatesToUpdate(self):
+    def getDaysToUpdate(self):
         """
         Returns an array of the delta dates to update for the sentiment analysis portion
         """
@@ -125,26 +97,32 @@ class TwitterCleanser(object):
         else:
             return self.delta_dates_updt
 
-    def writeCleansedTwitterData(self, dataframe, output_structure, clean_file_dir, group, is_orig_tweets):
+    def writeCleansedTwitterData(self, dataframe, group, column_struct):
         """
         ::param dataframe: Takes a dataframe as an object and writes it to a csv file
-        ::param file_path: the file to write the dataframe object to
-        Take the cleansed data and right it to the correct file.  Ensure that all the fields are formatted
-        correctly.  Set as a variable all the dates that need to be updated
+        ::param group: the group that the data is related to.  This identifies the table to write in.
+        ::param column_struct: the column structure for the output of the data
+        Take the cleansed data and write it to the correct table.
         """
-        if len(dataframe['date_as_str'].unique()) > len(self.delta_dates_updt):
-            self.delta_dates_updt = dataframe['date_as_str'].unique()
+        if group == 'OriginalTweets':
+            field_len = 5
+        else:
+            field_len = 7
+        data = tuple(dataframe[column_struct].itertuples(index = False))
+        wildcards = ','.join(['?'] * field_len)
+        insert_sql = """INSERT OR IGNORE INTO %s VALUES (%s)""" % (group, wildcards)
+        self.executeSQLCommand(insert_sql, data)
 
-        for distinct_date in dataframe['date_as_str'].unique():
-            dataframe.loc[dataframe['date_as_str'] == distinct_date]\
-                            [output_structure].\
-                            to_csv(clean_file_dir.joinpath(group + distinct_date + '.csv.gz') ,
-                                    compression = 'gzip',
-                                    mode = 'a',
-                                    sep = '\t',
-                                    index = False,
-                                    header = False,
-                                    line_terminator = '\n')
+    def executeSQLCommand(self, sql_stmnt, data= None):
+        """
+        ::param sql_stmt: the SQL statement to run on the connection
+        ::param data(Optional): The data to be loaded into the sql statement
+        """
+        if data is not None:
+            self.connection.executemany(sql_stmnt, data)
+        else:
+            self.connection.execute(sql_stmnt)
+        self.connection.commit()
 
     def uploadTweetsIntoCleanser(self):
         """
@@ -155,43 +133,42 @@ class TwitterCleanser(object):
         logging.info("Going through Raw Tweets to Cleanse")
         for group in self.all_groups:
             logging.info("Going through tweets for team %s" % group)
-            raw_data_dir = self.proj_data_dir.joinpath(group, 'RawData')
-            cleansed_data_dir = self.proj_data_dir.joinpath(group,'CleansedData')
+            self.executeSQLCommand("CREATE TABLE IF NOT EXISTS %s (%s)" % (group, self.table_fields))
 
+            raw_data_dir = self.proj_data_dir.joinpath(group)
             #get the files to be loaded, and remove any potential files that could have duplicate dateata
             if self.load_type == 'FULL':
-                raw_data_files = self.getFilesInDir(raw_data_dir)
-                for data_file in self.getFilesInDir(cleansed_data_dir):
-                    remove(cleansed_data_dir.joinpath(data_file))
-                for data_file in self.getFilesInDir(self.orig_tweet_dir):
-                    remove(self.orig_tweet_dir.joinpath(data_file))
+                raw_data_files = [f for f in listdir(raw_data_dir) if isfile(join(raw_data_dir, f)) and f.split('.')[1] == 'csv']
+                self.executeSQLCommand('DELETE FROM %s' % group)
+                self.executeSQLCommand('DELETE FROM OriginalTweets')
             else:
                 raw_data_files = [group + self.current_date + '.csv.gz']
 
             for data_file in raw_data_files:
                 #get original tweets and re-format the date
-                data_DF = pd.read_csv(raw_data_dir.joinpath(data_file) ,
+                data_DF = pd.read_csv(raw_data_dir.joinpath(data_file),
                                     compression = 'gzip',
                                     sep = '\t',
                                     index_col = False,
                                     encoding = 'utf-8',
-                                    names = ['id','user_id', 'date', 'full_text', 'replied_to_id', 'retweeted_id'],
+                                    names = ['id','user_id', 'datetime', 'full_text', 'replied_to_id', 'retweeted_id'],
                                     converters = {'full_text':lambda x:x.replace('\n','').replace('\r',''),
-                                                   'date': lambda x: self.convertToCentralTimeZone(x),
+                                                   'datetime': lambda x: self.convertToCentralTimeZone(x),
                                                    'replied_to_id': lambda x:  str(x) if x else '0',
                                                    'retweeted_id': lambda x: str(x) if x else '0'},
                                     lineterminator = '\n')
-                data_DF.loc[:, 'date_as_str'] = data_DF['date'].apply(self.getDateFromDateTime)
+                data_DF.loc[:, 'day'] = data_DF['datetime'].apply(self.getDateFromDateTime)
 
                 original_tweet_DF = data_DF.loc[(data_DF['replied_to_id'] == '0') & (data_DF['retweeted_id'] == '0')].copy()
                 self.original_dfs.append(original_tweet_DF)
-                self.reply_RT_dfs.append(data_DF.loc[(data_DF['replied_to_id'] != '0') | (data_DF['retweeted_id'] != '0')].copy())
-                self.data_files.append((cleansed_data_dir, group))
+                self.reply_RT_dfs[group].append(data_DF.loc[(data_DF['replied_to_id'] != '0') | (data_DF['retweeted_id'] != '0')].copy())
                 #if it is an original load, load all of the tweets to the correct file
                 original_tweet_DF.loc[:, 'retweets'] = 0
                 original_tweet_DF.loc[:, 'sentiment'] = 0
-                self.writeCleansedTwitterData(original_tweet_DF, self.clean_column_names,
-                                                cleansed_data_dir, group, False)
+
+                self.delta_dates_updt += list(data_DF['day'].unique())
+                self.delta_dates_updt = list(set(self.delta_dates_updt))
+                self.writeCleansedTwitterData(original_tweet_DF, group, self.clean_column_names)
 
     def updateOriginalTweets(self):
         """
@@ -200,23 +177,7 @@ class TwitterCleanser(object):
         """
         logging.info("Writing Original Tweets to Central File")
         for distinct_DF in self.original_dfs:
-            self.writeCleansedTwitterData(distinct_DF, ['id','user_id', 'date', 'full_text'],
-                                    self.orig_tweet_dir,  'OriginalTweetsOn' , True)
-
-        for data_file in self.getFilesInDir(self.orig_tweet_dir):
-            original_tweet_DF = pd.read_csv(self.orig_tweet_dir.joinpath(data_file),
-                                            compression = 'gzip',
-                                            sep = '\t',
-                                            index_col = False,
-                                            names = ['id','user_id', 'date', 'full_text'])
-            original_tweet_DF.drop_duplicates(subset = ['id'], keep = 'first', inplace = True)
-            original_tweet_DF.to_csv(self.orig_tweet_dir.joinpath(data_file),
-                                compression = 'gzip',
-                                mode = 'w',
-                                sep = '\t',
-                                index = False,
-                                header = False,
-                                line_terminator = '\n')
+            self.writeCleansedTwitterData(distinct_DF, 'OriginalTweets', self.original_column_names)
 
     def cleanseRepliedTweets(self):
         """
@@ -224,77 +185,20 @@ class TwitterCleanser(object):
         add the full text to each tweet.  Once the replied data has been added, insert the "cleaned"
         data to the dataframe
         """
-        original_files = self.getFilesInDir(self.orig_tweet_dir)
         logging.info("Going through Replied Data")
-        for index, clean_data_DF in enumerate(self.reply_RT_dfs):
-            replied_data_DF = pd.DataFrame(columns = self.clean_column_names)
-            clean_data_DF.loc[:, 'replied_to_id'] = clean_data_DF['replied_to_id'].astype('int')
-            all_dates = []
-            for date in clean_data_DF['date_as_str'].unique():
-                all_dates += self.getPreviousDays(date)
+        for group in self.all_groups:
+            self.executeSQLCommand("DELETE FROM Tmp_Rply")
+            for df in self.reply_RT_dfs[group]:
+                self.writeCleansedTwitterData(df, 'Tmp_Rply', self.tmp_rply_column_names)
 
-            for orig_file in original_files:
-                date_check = False
-                for date in all_dates:
-                    if date in orig_file:
-                        date_check = True
-                if date_check == False:
-                    continue
-
-                original_tweets_DF = pd.read_csv(self.orig_tweet_dir.joinpath(orig_file),
-                                                compression = 'gzip',
-                                                sep = '\t',
-                                                index_col = False,
-                                                encoding = 'utf-8',
-                                                names = ['id_num','user_id', 'date', 'full_orig_text'])
-
-                original_tweets_DF.loc[:, 'id_num'] = original_tweets_DF['id_num'].astype('int')
-
-                new_DF = pd.merge(clean_data_DF,
-                         original_tweets_DF[['id_num','full_orig_text']],
-                         how = 'left',
-                         left_on = ['replied_to_id'],
-                         right_on = ['id_num']).copy().dropna(subset = ['id_num'])
-                new_DF.loc[:, 'full_text'] = new_DF['full_orig_text'] + '|| ->' +  new_DF['full_text']
-
-                replied_data_DF = pd.concat([new_DF[['id', 'user_id','date', 'full_text', 'date_as_str']], replied_data_DF], sort = False)
-
-            self.writeCleansedTwitterData(replied_data_DF, self.clean_column_names,
-                                        self.data_files[index][0], self.data_files[index][1],  False)
-
-    def sumRetweets(self):
-        """
-        Sum the number of retweets in each specific dataframe and add the final counts to the cleaned tweet
-        files.  Add all the retweeted id's to the same dataframe for each group and then when a new group is reached,
-        add the sum counts to the cleaned tweets
-        """
-        logging.info("Summing Retweet Counts")
-        df_retweet_DF = pd.DataFrame(columns = ['retweeted_id'])
-        for index, replied_dataframe in enumerate(self.reply_RT_dfs):
-            replied_dataframe.loc[:, 'retweeted_id'] = replied_dataframe['retweeted_id'].astype('int')
-            df_retweet_DF = pd.concat([replied_dataframe[['retweeted_id']], df_retweet_DF], sort = False)
-            if index + 1 == len(self.reply_RT_dfs) or self.data_files[index][0] != self.data_files[index + 1][0]:
-                full_retweets_DF = replied_dataframe[['retweeted_id']].groupby('retweeted_id').size().reset_index(name = 'counts')
-                for file in self.getFilesInDir(self.data_files[index][0]):
-                    cleaned_tweets = pd.read_csv(self.data_files[index][0].joinpath(file),
-                                                    compression = 'gzip',
-                                                    sep = '\t',
-                                                    index_col = False,
-                                                    names = ['id', 'user_id','date', 'full_text', 'retweets', 'sentiment']).fillna(0)
-
-                    new_DF = pd.merge(cleaned_tweets,
-                                      full_retweets_DF,
-                                      how = 'left',
-                                      left_on = ['id'],
-                                      right_on = ['retweeted_id'])
-                    new_DF.loc[:,'retweets'] = new_DF['counts'].fillna(0) + new_DF['retweets'].fillna(0)
-                    new_DF[['id', 'user_id','date', 'full_text', 'retweets', 'sentiment']]\
-                            .to_csv(self.data_files[index][0].joinpath(file),
-                            compression = 'gzip',
-                            mode = 'w',
-                            sep = '\t',
-                            index = False,
-                            header = False)
-
-                #cleaned the retweet dataframe and move on to the next team.
-                df_retweet_DF.iloc[0:0]
+            #insert all the replied tweets to the table
+            join_data_sql = """INSERT OR IGNORE INTO %s SELECT a.id, a.user_id, a.datetime,
+                a.day, (ifnull(b.full_text, ' ') || ' || -> ' || a.full_text), 0 as retweets, 0 as sentiments
+                FROM Tmp_Rply a LEFT OUTER JOIN OriginalTweets b ON (a.replied_to_id = b.id) WHERE a.replied_to_id <> 0""" % group
+            self.executeSQLCommand(join_data_sql)
+            self.executeSQLCommand("INSERT INTO Retweets_To_Add SELECT retweeted_id, COUNT(retweeted_id) as Count FROM Tmp_Rply GROUP BY retweeted_id")
+            print("Summing Retweet values for %s" % group)
+            sum_sql = """UPDATE {0} SET Retweets = Retweets + (SELECT Count FROM Retweets_To_Add t1 WHERE {0}.id = t1.retweeted_id) \
+            WHERE EXISTS (SELECT * FROM Retweets_To_Add WHERE {0}.id = Retweets_To_Add.retweeted_id);""".format(group)
+            self.executeSQLCommand(sum_sql)
+            self.executeSQLCommand("DELETE FROM Retweets_To_Add")
