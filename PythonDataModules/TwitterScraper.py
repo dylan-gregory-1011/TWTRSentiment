@@ -82,7 +82,7 @@ class TwitterScraper(Twython):
         ::param max_id:  The max query from the previous data extract.  This will be used to limit the return
         """
         #update
-        self.output_file = self.proj_data_dir.joinpath(output_name, 'RawData', output_name + self.current_date + '.csv.gz')
+        self.output_file = self.proj_data_dir.joinpath(output_name, output_name + self.current_date + '.csv.gz')
         self.total_records_downloaded = 0
         query_updt = query.copy()
         query_updt['since_id'] = max_id
