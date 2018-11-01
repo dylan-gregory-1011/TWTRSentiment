@@ -1,25 +1,13 @@
 #The directory structure that is necessary to run the project.
 
-|-TwitterAnalysis.py
-|-TwitterCleanser.py
-|-TwitterScraper.py
-|-EmojiDictionary.json
-|-TwitterSentimentAnalysis.py
-|- ProjectName
-|  |- Data 
-|    |- Group 1
-|      |-RawData
-|      |-CleansedData
-|    |- Group 2
-|      |-RawData
-|      |-CleansedData
-|    .
-|    .
-|    .
-|    |- Group N
-|      |-RawData
-|      |-CleansedData
-|  CalculatedData.csv
-|  TwitterAPIKeys.json
-|  TwitterSearchQueries.csv
-|  RecordCounts.csv
+| TwitterAnalysisTool.py
+| ProjectArea
+- | ProjectName
+- - | CalculatedSentimentData.csv
+- - | CleansedData.db 
+- - | RecordCounts.csv
+| DataSources
+- | Twitter 
+- - | ProjectName
+- - - | Group
+- - - - | Data
