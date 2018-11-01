@@ -26,30 +26,28 @@ __email__ = "-"
 __status__ = "Development"
 
 class TwitterScraper(Twython):
-    #properties
-    curr_dir = Path().resolve()
     #initialization
-    def __init__(self, project_name):
+    def __init__(self, proj_data_dir, proj_analysis_dir, api_key_file):
         """ Instantiates an instance of the Twython Scraper.  Takes one input and sets up
             the correct connection
 
-            ::param output_file_folder: The File Folder that will hold the result sets
+            ::param proj_data_dir: The File Folder that will hold all of the data files
+            ::param proj_analysis_dir: The project folder where the analysis files are housed
+            ::param api_key_file: The folder where the API Keys are found
         """
         logging.info('------- Instantiating Twython Object -------')
-        logging.info('-- Setting Credentials and Search Terms --')
         #Properties
         self.apiCallsLeftInPeriod = 1000
-        self.proj_dir = self.curr_dir.joinpath(project_name)
-        self.proj_name = project_name
+        self.proj_data_dir = proj_data_dir
+        self.proj_dir = proj_analysis_dir
         self.client_args = {'headers': {'User-Agent': 'Chrome',"accept-charset": "utf-8", }, }
         self.current_date = datetime.today().strftime('%Y%m%d')
         self.delay_time = 1.5
         #get credentials and instantiate
-        self.credentials = self.getTwitterCredentials(self.proj_dir.joinpath('TwitterAPIKeys.json'))
+        self.credentials = self.getTwitterCredentials(api_key_file)
         self.twitter = Twython(self.credentials['TWITTER_APP_KEY'],
                             self.credentials['TWITTER_APP_SECRET'],
                             client_args = self.client_args )
-        logging.info('-- Twython object instantiated --')
 
     #Methods
     def getTwitterCredentials(self, credentials_file):
@@ -71,7 +69,7 @@ class TwitterScraper(Twython):
         """
         Returns the query path for the project in question to allow the user to iterate through queries
         """
-        return self.proj_dir.joinpath('TwitterSearchQueries.csv')
+        return self.proj_dir.joinpath('TwitterSearchQueries.json')
 
     def downloadHistoricalTweets(self, output_name, query, max_id):
         """
@@ -84,17 +82,17 @@ class TwitterScraper(Twython):
         ::param max_id:  The max query from the previous data extract.  This will be used to limit the return
         """
         #update
-        self.output_file = self.proj_dir.joinpath('Data', output_name, 'RawData', output_name + self.current_date + '.csv.gz')
+        self.output_file = self.proj_data_dir.joinpath(output_name, 'RawData', output_name + self.current_date + '.csv.gz')
         self.total_records_downloaded = 0
-        self.query_updt = query.copy()
-        self.query_updt['since_id'] = max_id
+        query_updt = query.copy()
+        query_updt['since_id'] = max_id
 
         #Make first pass at data and update new max
-        self.new_min_id = self.downloadTweetsForQuery(self.query_updt, True)
+        self.new_min_id = self.downloadTweetsForQuery(query_updt, True)
 
         while type(self.new_min_id) is int:
-            self.query_updt['max_id'] = str(self.new_min_id - 1)
-            self.new_min_id = self.downloadTweetsForQuery(self.query_updt, False)
+            query_updt['max_id'] = str(self.new_min_id - 1)
+            self.new_min_id = self.downloadTweetsForQuery(query_updt, False)
 
         logging.info('-- %i Tweets on %s for Time Period have Downloaded --' % (self.total_records_downloaded, output_name))
         #return the new max update to update the dataframe
@@ -120,7 +118,7 @@ class TwitterScraper(Twython):
         sleep(self.delay_time)
 
         try:
-            self.twitter_results = self.twitter.search(**query)
+            twitter_results = self.twitter.search(**query)
         except TwythonError as e:
             print(e.error_code)
             if int(e.error_code) == 503:
@@ -128,31 +126,31 @@ class TwitterScraper(Twython):
         #check to see how many calls are available this period
         self.apiCallsLeftInPeriod = self.twitterCallsRemainingDuringPeriod()
         #create the temp dataframe to download the data in
-        self.dict_ = { 'id': [],'user': [], 'date': [], 'full_text': [], 'replied_to_id': [], 'retweeted_id': []}
+        dict_ = { 'id': [],'user': [], 'date': [], 'full_text': [], 'replied_to_id': [], 'retweeted_id': []}
 
-        for self.status in self.twitter_results['statuses']:
+        for status in twitter_results['statuses']:
             #format the retweeted status as well as the replied to comments
-            if 'retweeted_status' not in self.status:
-                self.cleaned_tweet = self.cleanTweet(self.status['full_text'])
-                self.retweeted_id = ''
+            if 'retweeted_status' not in status:
+                cleaned_tweet = self.cleanTweet(status['full_text'])
+                retweeted_id = ''
             else:
-                self.cleaned_tweet = self.cleanTweet(self.status['retweeted_status']['full_text'])
-                self.retweeted_id = self.status['retweeted_status']['id']
+                cleaned_tweet = self.cleanTweet(status['retweeted_status']['full_text'])
+                retweeted_id = status['retweeted_status']['id']
 
             #format the dictionary and add the tweets to the format.  clean the tweets
-            self.dict_['id'].append(self.xstr(self.status['id']))
-            self.dict_['user'].append(self.xstr(self.status['user']['screen_name']))
-            self.dict_['date'].append(self.xstr(self.status['created_at']))
-            self.dict_['full_text'].append(self.xstr(self.cleaned_tweet))
-            self.dict_['replied_to_id'].append(self.xstr(self.status['in_reply_to_status_id_str']))
-            self.dict_['retweeted_id'].append(self.xstr(self.retweeted_id))
+            dict_['id'].append(self.xstr(status['id']))
+            dict_['user'].append(self.xstr(status['user']['screen_name']))
+            dict_['date'].append(self.xstr(status['created_at']))
+            dict_['full_text'].append(self.xstr(cleaned_tweet))
+            dict_['replied_to_id'].append(self.xstr(status['in_reply_to_status_id_str']))
+            dict_['retweeted_id'].append(self.xstr(retweeted_id))
 
 
-        self.total_records_downloaded += len(self.twitter_results['statuses'])
+        self.total_records_downloaded += len(twitter_results['statuses'])
 
-        logging.info("-- %i Total Records Downloaded --" % self.total_records_downloaded)
-        self.df = pd.DataFrame(self.dict_)
-        self.df.to_csv(self.output_file,
+        #logging.info("-- %i Total Records Downloaded --" % self.total_records_downloaded)
+        df = pd.DataFrame(dict_)
+        df.to_csv(self.output_file,
                     compression = 'gzip',
                     mode = 'a',
                     sep='\t',
@@ -162,9 +160,9 @@ class TwitterScraper(Twython):
                     line_terminator = '\n')
 
         if first:
-            self.new_max_id = max([int(x) for x in self.dict_['id']])
+            self.new_max_id = max([int(x) for x in dict_['id']])
         try:
-            return min([int(x) for x in self.dict_['id']])
+            return min([int(x) for x in dict_['id']])
         except:
             return None
 
