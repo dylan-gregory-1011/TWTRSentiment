@@ -85,7 +85,7 @@ class TwitterSentimentAnalyzer(object):
                 for date_to_add in cleansed_data_DF['day'].unique():
                     if date_to_add not in total_record_counts_DF['Date'].tolist():
                         new_record = len(total_record_counts_DF['Date'])
-                        total_sentiment_DF.loc[new_record] = [date_to_add] + [0 for group in self.all_groups] + [0]
+                        total_sentiment_DF.loc[new_record] = [date_to_add] + [0 for group in self.all_groups]
                         total_record_counts_DF.loc[new_record] = [date_to_add] + [0 for group in self.all_groups]
 
                     #add the records to the data counts
