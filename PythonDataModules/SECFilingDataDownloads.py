@@ -92,6 +92,7 @@ class SECFilingDataDownload(object):
             df_qtr['cik_name'] = df_qtr['cik'].map(int).map(str) + '|' + df_qtr['name'] + '~' + df_qtr['qtr']
             df_qtr['file'] = filing_period
             #get the minimum quarters reported for each file.  This allows us to get the closes to a quarterly report
+            df_qtr['qtrs'] = df_qtr['qtrs'].replace(0,1)
             df_min = df_qtr[['adsh', 'ddate', 'qtrs']].groupby(['ddate', 'adsh'], sort = True)['qtrs'].min().reset_index(name = 'qtrs')
             df_min['qtrs_min'] = df_min['qtrs']
             df_min.drop(['qtrs'], axis = 1, inplace = True)
